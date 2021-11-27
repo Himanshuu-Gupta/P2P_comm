@@ -2,11 +2,14 @@ import socket
 from multiprocessing import Lock
 from threading import Thread
 import os
+from os.path import exists
 import time
 import platform
 from typing import OrderedDict
 from RFC import RFC
 from Peers import Peer
+import time
+from time import gmtime, strftime
 
 HOST_OS = platform.platform()
 VERSION = "P2P-CI/1.0"
@@ -18,6 +21,7 @@ rfcs=OrderedDict()
 peers=[]
 lock_rfcs = Lock()
 lock_peers = Lock()
+RFCS_PATH = "./RFC/"
 
 STATUS_CODES = {
     "OK": ["200","OK"],
@@ -28,15 +32,6 @@ STATUS_CODES = {
 
 SERVER_ADD = "192.168.1.230"
 
-def generate_response(conn, status, response_result):
-    respmsg = VERSION +" " +STATUS_CODES[status][0] +" "+ STATUS_CODES[status][1]+"\r\n"+\
-            +"\r\n"
-
-    for response in response_result:
-        respmsg = respmsg + response[0]+" "+response[1]+" "+response[2]+" "+response[3]+"\r\n"
-    respmsg = respmsg + "\r\n"
-    conn.sendall(respmsg.encode())
-
 def is_peer_added(hostname, lock_peers, peers):
     lock_peers.acquire()
     for peer in peers:
@@ -46,29 +41,60 @@ def is_peer_added(hostname, lock_peers, peers):
     lock_peers.release()
     return False
 
+def generate_response(conn, status, response_result):
+    respmsg = VERSION +" " +STATUS_CODES[status][0] +" "+ STATUS_CODES[status][1]+"\r\n\r\n"
+    print("Generating Response Message")
+    for response in response_result:
+        respmsg = respmsg + response[0]+" "+response[1]+" "+response[2]+" "+response[3]+"\r\n"
+    respmsg = respmsg + "\r\n"
+    print("\n~~~~~ Server Response Message~~~~~~ \n", respmsg)
+    conn.sendall(respmsg.encode())
+
+def generate_download_response(conn, status, content, current_time, modified_time):
+    respmsg = VERSION + " " +STATUS_CODES[status][0] +" "+ STATUS_CODES[status][1] + "\r\n"
+    if status == "OK":
+        respmsg =  respmsg + "Date: " + current_time + "\r\n" +\
+            "OS: " + HOST_OS + "\r\n" +\
+            "Last-Modified: " + modified_time + "\r\n" +\
+            "Content-Length: " + str(len(content)) + "\r\n" +\
+            "Content Type: text/text\r\n" + \
+            content + "\r\n" +\
+            "\r\n"
+    print("\n~~~~~ Server Response Message~~~~~~ \n", respmsg)
+    conn.sendall(respmsg.encode())
 
 def server_main_func(conn, client_add):
     try:
         while True:
             #Opening the connection to receive the data from the client
-            data = conn.recv(MAX_BUFFER_LEN)
-            if not data:
-                break
-            
+            datarec = conn.recv(MAX_BUFFER_LEN)
+            # if not data:
+            #     break
+            data = str(datarec)
+            data=data[2:]
+            # print("Data", data, type(data))
+            # print("Split", data.split("\r\n"))
+            #print("decoded data", data.decode())
             # Process the data received to get the header fields and data field values
-            request = data.decode().split('\r\n')
+            request = data.split('\\r\\n')
+            print("\n\n~~~~ Request received on server ~~~~~")
+            print("Request", request)
             request_type = request[0].split()[0]
-            rfc_version = request[0].split()[-1]
+            print("Request Type - ", request_type)
             client_hostname = request[1].split()[1]
+            print("Client Hostname - ",client_hostname)
             client_port = int(request[2].split()[1])
+            print("Client Port", client_port)
+            rfc_version = request[0].split()[-1]
+            print("RFC Version - ", rfc_version)
             final_response_result = []
-            print(request_type, rfc_version, client_hostname, client_port)
-
+            content=current_time=modified_time=""
+            print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n")
             if request_type == "ADD":
                 rfc_number = int(request[0].split()[2])
-                rfc_title = request[3].split()[1]
+                rfc_title = request[3][7:]
                 response_code = "OK"
-                final_response_result.append(["RFC-"+str(rfc_number), str(rfc_title), str(client_hostname), str(client_port)])
+                final_response_result.append(["RFC "+str(rfc_number), str(rfc_title), str(client_hostname), str(client_port)])
 
                 if rfc_version != VERSION:
                     response_code = "VERSION_NOT_SUPPORTED"
@@ -86,7 +112,7 @@ def server_main_func(conn, client_add):
                     # Add RFC to RFCs list
                     lock_rfcs.acquire()
                     if rfc_number in rfcs.keys():
-                        print("old")
+                        print("RFC present in list" - rfcs[rfc_number])
                         # check if client has already added that RFC(avoid duplication)
                         already_present = False
                         for client in rfcs[rfc_number]:
@@ -96,13 +122,15 @@ def server_main_func(conn, client_add):
                         if not already_present:
                             rfcs[rfc_number] = rfcs[rfc_number] + [new_rfc]
                     else:
-                        print("new")
+                        #print("Adding RFC to the list")
                         rfcs[rfc_number] = [new_rfc]
+                        #print("RFCS index", rfcs, new_rfc)
                     lock_rfcs.release()
+                #print("Calling generate_response", generate_response(conn, response_code, final_response_result))
                 generate_response(conn, response_code, final_response_result)
             elif request_type == "LOOKUP":
                 rfc_number = int(request[0].split()[2])
-                rfc_title = request[3].split()[1]
+                rfc_title = request[3][7:]
                 response_code = "OK"
 
                 if rfc_version != VERSION:
@@ -111,20 +139,19 @@ def server_main_func(conn, client_add):
                     # Check if this RFC is present
                     lock_rfcs.acquire()
                     lock_peers.acquire()
-                    print(rfc_title)
+                    #print("RFC Title - ", rfc_title)
                     if rfc_number in rfcs.keys():
                         # If RFC is present add all hosts having this rfc to response_data
                         rfcs_list = rfcs[rfc_number]
-                        print("test")
                         for rfc in rfcs_list:
                             for peer in peers:
                                 if rfc.hostname == peer.hostname:
+                                    print("RFC found on - ", rfc.hostname)
                                     final_response_result.append(["RFC-"+str(rfc_number), str(rfc_title), str(peer.hostname), str(peer.port)])
                     else:
                         response_code = "NOT_FOUND"
                     lock_peers.release()
                     lock_rfcs.release()
-                    print("end")
                 generate_response(conn, response_code, final_response_result)
             elif request_type == "LIST":
                 response_code = "OK"
@@ -139,6 +166,27 @@ def server_main_func(conn, client_add):
                 lock_peers.release()
                 lock_rfcs.release()
                 generate_response(conn, response_code, final_response_result)
+            elif request_type == "GET":
+                rfc_number = int(request[0].split()[2])
+                lock_rfcs.acquire()
+                lock_peers.acquire()
+                file_path = RFCS_PATH+'rfc'+str(rfc_number)+'.txt'
+                if exists(file_path):
+                    print("File found at server", file_path)
+                    response_code = "OK"
+                    with open(file_path) as f:
+                        content = f.read()
+                        print("content", content)
+                    print("content1",content)
+                    f.close()
+                    current_time = strftime("%a, %d %b %Y %X GMT", gmtime())
+                    modified_time = strftime("%a, %d %b %Y %X GMT", time.gmtime(os.path.getmtime(file_path)))
+                else:
+                    response_code = "NOT_FOUND"
+                lock_peers.release()
+                lock_rfcs.release()
+                print(content)
+                generate_download_response(conn, response_code, content, current_time, modified_time)
            
     finally:
         # Close connection in the end

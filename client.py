@@ -11,7 +11,7 @@ VERSION = "P2P-CI/1.0"
 SERVER_PORT = 7734
 MAX_RESPONSE_SIZE = 4096
 MAX_REQUEST_SIZE = 4096
-RFCS_PATH = "./RFCs/client1/"
+RFCS_PATH = "./RFC/download/"
 
 
 STATUS_CODES = {
@@ -32,32 +32,35 @@ lock_my_rfcs = Lock()
 
 socket_details = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 socket_details.bind((CLIENT_ADD, 0))
-upload_port = socket_details.getsockname()
-print(upload_port)
+upload_port = socket_details.getsockname()[1]
+#print("Port Details",upload_port)
 
 def list_all_RFC(sock, upload_port):
+    # "\r shows the carriage return and \n shows the new line in the generated response" 
     list_request = "LIST"+" "+"ALL "+VERSION+"\r\n" + \
                    "Host:"+" "+CLIENT_ADD+"\r\n" + \
                    "Port:"+" "+str(upload_port)+"\r\n" + \
                    "\r\n"
-
+    print("\n~~~~~~ Request Generated to sent to server~~~~~~ \n", list_request)
     sock.sendall(list_request.encode())
     response = sock.recv(MAX_RESPONSE_SIZE).decode()
+    print("\n~~~~~~~~Response received from server~~~~~~~~~\n",response)
     return response
 
-def add_new_RFC(sock, rfc):
-    rfc_title = rfc.split('.')[0]
-    rfc_number = int(rfc_title[3:])
+def add_new_RFC(sock, rfc_title, rfc_number):
+    #rfc_title = rfc.split('-')[0]
+    #rfc_number = int(rfc_title[4:])
+    print("\n RFC number - ", rfc_number, rfc_title)
     add_request = "ADD"+" "+"RFC "+str(rfc_number)+" "+VERSION+"\r\n" + \
                   "Host:"+" "+CLIENT_ADD+"\r\n" + \
                   "Port:"+" "+str(upload_port)+"\r\n" + \
                   "Title:"+" "+rfc_title+"\r\n" + \
                   "\r\n"
-
+    print("\n~~~~~~ Request Generated to sent to server~~~~~~ \n", add_request)
     sock.sendall(add_request.encode())
     response = sock.recv(MAX_RESPONSE_SIZE).decode()
-
-    if int((response.split('\r\n')[0]).split()[1]) == "OK":
+    print("\n~~~~~~~~Response received from server~~~~~~~~~\n",response)
+    if int((response.split('\r\n')[0]).split()[1]) == STATUS_CODES["OK"][0]:
         lock_my_rfcs.acquire()
         if rfc_number not in my_rfcs:
             my_rfcs.append(rfc_number)
@@ -70,13 +73,12 @@ def lookup_rfc(sock, rfc_number, rfc_title):
                      "Port:"+" "+str(upload_port)+"\r\n" + \
                      "Title:"+" "+rfc_title+"\r\n" + \
                      "\r\n"
-
+    print("\n~~~~~~ Request Generated to sent to server~~~~~~ \n", lookup_request)
     sock.sendall(lookup_request.encode())
     response = sock.recv(MAX_RESPONSE_SIZE).decode()
+    print("\n~~~~~~~~Response received from server~~~~~~~~~\n",response)
     return response
 
-# for each in STATUS_CODES:
-#     print(STATUS_CODES[each][0], STATUS_CODES[each][1])
 def serve_peers():
     socket_details.listen()
 
@@ -127,42 +129,43 @@ def serve_peers():
         peer_sock.close()
     
 
-def rfc_download_request(rfc_number, hostname, port):
+def rfc_download_request(sock, rfc_number, hostname, port):
     download_request = "GET" + " RFC " + str(rfc_number) + " " + VERSION + "\r\n" +\
                 "Host: " + hostname + "\r\n" +\
+                "Port:"+" "+str(port)+"\r\n" + \
                 "OS: " + HOST_OS + "\r\n" +\
                 "\r\n"
-
-    download_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    host_ip = socket.gethostbyname(hostname)
-    download_sock.connect((host_ip, port))
-    download_sock.sendall(download_request.encode())
+    print("\n~~~~~~ Request Generated to sent to server~~~~~~ \n", download_request)
+    # download_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # host_ip = socket.gethostbyname(hostname)
+    # download_sock.connect((host_ip, port))
+    sock.sendall(download_request.encode())
     
-    data = ''
-    while True:
-        response = download_sock.recv(MAX_RESPONSE_SIZE).decode()
-        if not response:
-            break
-        data += response
-
+    data = sock.recv(MAX_RESPONSE_SIZE).decode()
+    # while True:
+    #     response = sock.recv(MAX_RESPONSE_SIZE).decode()
+    #     if not response:
+    #         break
+    #     data += response
+    print("\n~~~~~~~~Response received from server~~~~~~~~~\n",data)
     split_response = data.split('\r\n')
-    content_len = int(split_response[4].split(':')[1])
-
-    if int(split_response[0].split()[1]) != "OK":
-        return '\r\n'.join(split_response[:6])
-
-    data = data[-4-content_len:-4]
-
-    file_path = RFCS_PATH+'rfc'+str(rfc_number)+'.txt'
-    my_file = open(file_path, 'w')
-    my_file.write(data)
-
-    my_file.close()
-    download_sock.close()
-    
+    print("Response",split_response[0])
+    if "OK" in split_response[0]:
+    # Opening the file path and writing contents to the file 
+        isExist = os.path.exists(RFCS_PATH)
+        if not isExist:
+            # Create a new download directory in the client folder
+            os.makedirs(RFCS_PATH)
+            print("Creating a download directory in ./RFC/download in the current client directory")
+        file_path = RFCS_PATH+'rfc'+str(rfc_number)+'.txt'
+        my_file = open(file_path, 'w')
+        my_file.write(data)
+        my_file.close()
+    # download_sock.close()
     return '\r\n'.join(split_response[:6])
 
 def print_main_menu():
+    print("~~~~~~~Main Menu~~~~~~")
     print("1. ADD New RFC")
     print("2. LOOKUP RFC")
     print("3. LIST ALL RFC")
@@ -176,31 +179,28 @@ if __name__ == '__main__':
     p_serve_peers.start()
 
     SERVER_IP = socket.gethostbyname(SERVER_ADD)
-    print("Establishing Connection to - "+SERVER_IP)
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.connect((SERVER_IP, SERVER_PORT))
-
+    print("Establishing Connection to - "+SERVER_IP)
     while True:
         print_main_menu()
-        option = int(input("Main Menu:"))
+        option = int(input("\nSelect option from above menu - "))
         if option == 1:
-            rfc = input("\nEnter filename: ")
-            response = add_new_RFC(sock, rfc)
-            print("Add RFC " + str(rfc) + "\n\nServer Response:\n" + response)
+            rfcnum = input("\nEnter RFC number (e.g-\"532\"): ")
+            rfctitle = 'RFC-'+str(rfcnum)
+            response = add_new_RFC(sock, rfctitle, rfcnum)
         elif option == 2:
+            print("Enter only RFC number you are looking for e.g. for RFC-2, please enter \"2\" - ")
             lookup_rfc_number = input("\nEnter RFC number to lookup for: ")
-            lookup_rfc_title = 'rfc'+str(lookup_rfc_number) 
+            lookup_rfc_title = 'RFC-'+str(lookup_rfc_number) 
             response = lookup_rfc(sock, lookup_rfc_number, lookup_rfc_title)
-            print("Lookup RFC "+ str(lookup_rfc_number) + "\nServer Response:\n" + response)
         elif option == 3:
             response = list_all_RFC(sock, upload_port)
-            print("LIST RFC\n\nServer Response:\n" + response)
         elif option == 4:
-            download_rfc_number = input("\nEnter RFC number: ")
-            get_rfc_from = input("Enter host: ")
-            get_rfc_from_port = int(input("Enter port: "))
-            response = rfc_download_request(download_rfc_number, get_rfc_from, get_rfc_from_port)
-            print("Download RFC\n\nServer Response:\n" + response)
+            download_rfc_number = input("\nEnter RFC number to download:")
+            get_rfc_host = input("Enter host: ")
+            get_rfc_port = int(input("Enter port: "))
+            response = rfc_download_request(sock, download_rfc_number, get_rfc_host, get_rfc_port)
         elif option == 5:
             sock.close()
             exit(0)
